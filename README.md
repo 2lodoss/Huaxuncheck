@@ -19,6 +19,11 @@
 # 公告
 
 ## 项目还在开发中，作者是编程老白菜，有些commit有bug，目前仅支持Windows 10，其他没条件没测试
+![image](https://github.com/user-attachments/assets/3f75e761-1ca6-40f7-8d5f-7abc607b284f)
+
+
+![image](https://github.com/user-attachments/assets/16091f26-e054-4874-8f1d-acb4c081c0e7)
+
 
 ## 功能特点
 
