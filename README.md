@@ -93,7 +93,7 @@ start.bat
 ## 项目结构
 
 ```
-network-inspection-system/
+Huaxuncheck/
 ├── app.py                 # 后端主程序
 ├── requirements.txt       # 依赖包列表
 ├── start.bat             # Windows启动脚本
