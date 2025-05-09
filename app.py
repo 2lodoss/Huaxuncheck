@@ -15,6 +15,7 @@ import pandas as pd
 from flask import Flask, jsonify, request, send_file, render_template
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from flask import send_from_directory
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
