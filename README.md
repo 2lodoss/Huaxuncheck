@@ -24,6 +24,10 @@
 
 ![image](https://github.com/user-attachments/assets/16091f26-e054-4874-8f1d-acb4c081c0e7)
 
+新增巡检日志
+![image](https://github.com/user-attachments/assets/f1698e99-021e-4b50-96c1-753f05eb05aa)
+
+
 
 ## 功能特点
 
