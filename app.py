@@ -82,6 +82,31 @@ class InspectionRecord(db.Model):
             'created_at': self.created_at.isoformat()
         }
 
+# 巡检日志模型 - 新增
+class InspectionLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    start_time = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(tz))
+    end_time = db.Column(db.DateTime, nullable=True)
+    total_devices = db.Column(db.Integer, default=0)
+    successful_devices = db.Column(db.Integer, default=0)
+    failed_devices = db.Column(db.Integer, default=0)
+    total_duration = db.Column(db.Float, default=0)  # 以秒为单位
+    details = db.Column(db.Text, nullable=True)  # JSON格式存储详情
+    status = db.Column(db.String(20), default='进行中')  # 进行中/已完成/已取消
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'end_time': self.end_time.isoformat() if self.end_time else None,
+            'total_devices': self.total_devices,
+            'successful_devices': self.successful_devices,
+            'failed_devices': self.failed_devices,
+            'total_duration': self.total_duration,
+            'details': json.loads(self.details) if self.details else [],
+            'status': self.status
+        }
+
 # 创建数据库表
 with app.app_context():
     try:
@@ -231,6 +256,25 @@ def inspect_device(device_id):
         }), 400
 
     try:
+        # 创建巡检日志 - 单设备巡检
+        inspection_log = InspectionLog(
+            total_devices=1,
+            status='进行中',
+            details=json.dumps([{
+                'device_id': device.id,
+                'device_name': device.name,
+                'device_ip': device.ip,
+                'status': '进行中',
+                'message': '正在巡检...',
+                'start_time': datetime.now(tz).isoformat()
+            }])
+        )
+        db.session.add(inspection_log)
+        db.session.commit()
+        
+        # 记录开始时间
+        start_time = time.time()
+        
         # 获取设备类型
         device_type = get_device_type(device.device_type, device.protocol)
         
@@ -308,26 +352,43 @@ def inspect_device(device_id):
             commands = cleaned_commands
             logger.info(f"清理后的设备 {device.ip} 的巡检命令: {commands}")
             
-            # 执行每个命令
+            # 执行命令
+            command_success = True  # 添加命令执行状态跟踪
+            command_results = []  # 添加command_results变量定义
             for cmd in commands:
                 try:
-                    logger.info(f"正在执行命令: {cmd}")
+                    logger.info(f"设备 {device.ip} 执行命令: {cmd}")
                     output = connection.send_command(cmd, strip_prompt=False, strip_command=False)
-                    logger.info(f"命令 {cmd} 执行成功")
-                    results.append({
+                    command_results.append({
                         'command': cmd,
                         'output': output
                     })
+                    logger.info(f"设备 {device.ip} 命令 {cmd} 执行成功")
                 except Exception as e:
                     error_msg = f"执行命令 {cmd} 失败: {str(e)}"
                     logger.error(error_msg)
-                    results.append({
+                    command_success = False
+                    command_results.append({
                         'command': cmd,
                         'output': error_msg
                     })
         except Exception as e:
             error_msg = f"处理巡检命令时出错: {str(e)}"
             logger.error(error_msg)
+            # 更新巡检日志
+            inspection_log.end_time = datetime.now(tz)
+            inspection_log.failed_devices = 1
+            inspection_log.status = '已完成'
+            inspection_log.total_duration = time.time() - start_time
+            
+            device_details = json.loads(inspection_log.details)
+            device_details[0]['status'] = '失败'
+            device_details[0]['message'] = error_msg
+            device_details[0]['end_time'] = datetime.now(tz).isoformat()
+            inspection_log.details = json.dumps(device_details)
+            
+            db.session.commit()
+            
             return jsonify({
                 'success': False,
                 'message': error_msg
@@ -342,7 +403,7 @@ def inspect_device(device_id):
             record = InspectionRecord(
                 device_id=device.id,
                 device_name=device.name,
-                result=json.dumps(results, ensure_ascii=False)
+                result=json.dumps(command_results, ensure_ascii=False)
             )
             db.session.add(record)
             db.session.commit()
@@ -359,14 +420,44 @@ def inspect_device(device_id):
             db.session.rollback()
             raise
         
+        # 更新巡检日志
+        inspection_log.end_time = datetime.now(tz)
+        inspection_log.successful_devices = 1 if command_success else 0
+        inspection_log.failed_devices = 0 if command_success else 1
+        inspection_log.status = '已完成' if command_success else '已完成但失败'
+        inspection_log.total_duration = time.time() - start_time
+        
+        device_details = json.loads(inspection_log.details)
+        device_details[0]['status'] = '成功' if command_success else '失败'
+        device_details[0]['message'] = '巡检完成' if command_success else error_msg
+        device_details[0]['end_time'] = datetime.now(tz).isoformat()
+        inspection_log.details = json.dumps(device_details)
+        
+        db.session.commit()
+        
         return jsonify({
             'success': True,
-            'results': results
+            'results': command_results
         })
         
     except netmiko.ssh_exception.NetMikoTimeoutException as e:
         error_msg = f'连接设备 {device.name} ({device.ip}) 超时，请检查网络连接或设备是否可达: {str(e)}'
         logger.error(error_msg)
+        
+        # 更新巡检日志
+        inspection_log.end_time = datetime.now(tz)
+        inspection_log.failed_devices = 1
+        inspection_log.status = '已完成'
+        inspection_log.total_duration = time.time() - start_time
+        
+        device_details = json.loads(inspection_log.details)
+        device_details[0]['status'] = '失败'
+        device_details[0]['message'] = error_msg
+        device_details[0]['end_time'] = datetime.now(tz).isoformat()
+        inspection_log.details = json.dumps(device_details)
+        
+        db.session.commit()
+        
         return jsonify({
             'success': False,
             'message': error_msg
@@ -374,6 +465,21 @@ def inspect_device(device_id):
     except netmiko.ssh_exception.NetMikoAuthenticationException as e:
         error_msg = f'设备 {device.name} ({device.ip}) 认证失败，请检查用户名和密码是否正确: {str(e)}'
         logger.error(error_msg)
+        
+        # 更新巡检日志
+        inspection_log.end_time = datetime.now(tz)
+        inspection_log.failed_devices = 1
+        inspection_log.status = '已完成'
+        inspection_log.total_duration = time.time() - start_time
+        
+        device_details = json.loads(inspection_log.details)
+        device_details[0]['status'] = '失败'
+        device_details[0]['message'] = error_msg
+        device_details[0]['end_time'] = datetime.now(tz).isoformat()
+        inspection_log.details = json.dumps(device_details)
+        
+        db.session.commit()
+        
         return jsonify({
             'success': False,
             'message': error_msg
@@ -381,6 +487,21 @@ def inspect_device(device_id):
     except Exception as e:
         error_msg = f'巡检设备 {device.name} ({device.ip}) 失败: {str(e)}'
         logger.error(error_msg)
+        
+        # 更新巡检日志
+        inspection_log.end_time = datetime.now(tz)
+        inspection_log.failed_devices = 1
+        inspection_log.status = '已完成'
+        inspection_log.total_duration = time.time() - start_time
+        
+        device_details = json.loads(inspection_log.details)
+        device_details[0]['status'] = '失败'
+        device_details[0]['message'] = error_msg
+        device_details[0]['end_time'] = datetime.now(tz).isoformat()
+        inspection_log.details = json.dumps(device_details)
+        
+        db.session.commit()
+        
         return jsonify({
             'success': False,
             'message': error_msg
@@ -648,6 +769,285 @@ def batch_export_records():
         )
     except Exception as e:
         logger.error(f"批量导出巡检记录失败: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# 批量巡检API - 保持简单实现
+@app.route('/api/devices/batch-inspect', methods=['POST'])
+def batch_inspect_devices():
+    data = request.json
+    if not data or not data.get('device_ids') or not isinstance(data.get('device_ids'), list):
+        return jsonify({
+            'success': False,
+            'message': '请提供要巡检的设备ID列表'
+        }), 400
+    
+    device_ids = data.get('device_ids')
+    try:
+        devices = Device.query.filter(Device.id.in_(device_ids), Device.status == 'online').all()
+        
+        if not devices:
+            return jsonify({
+                'success': False,
+                'message': '所选设备中没有在线设备，无法进行巡检'
+            }), 400
+        
+        # 创建巡检日志
+        device_details = []
+        for device in devices:
+            device_details.append({
+                'device_id': device.id,
+                'device_name': device.name,
+                'device_ip': device.ip,
+                'status': '等待中',
+                'message': '等待巡检...',
+                'start_time': None,
+                'end_time': None
+            })
+        
+        inspection_log = InspectionLog(
+            total_devices=len(devices),
+            status='进行中',
+            details=json.dumps(device_details)
+        )
+        db.session.add(inspection_log)
+        db.session.commit()
+        
+        # 执行巡检
+        results = []
+        successful_count = 0
+        failed_count = 0
+        start_time = time.time()
+        
+        for idx, device in enumerate(devices):
+            try:
+                # 重新检查日志状态，如果已取消则中止执行
+                current_log = InspectionLog.query.get(inspection_log.id)
+                if current_log.status == '已取消':
+                    logger.info(f"巡检任务 {inspection_log.id} 被用户取消")
+                    break
+                    
+                # 更新当前设备状态
+                device_details = json.loads(inspection_log.details)
+                device_details[idx]['status'] = '进行中'
+                device_details[idx]['message'] = '正在巡检...'
+                device_details[idx]['start_time'] = datetime.now(tz).isoformat()
+                inspection_log.details = json.dumps(device_details)
+                db.session.commit()
+                
+                # 获取设备类型
+                device_type = get_device_type(device.device_type, device.protocol)
+                logger.info(f"开始巡检设备: {device.name} ({device.ip}), 设备类型: {device_type}")
+                
+                # 连接参数
+                connection_params = {
+                    'device_type': device_type,
+                    'host': device.ip,
+                    'username': device.username,
+                    'password': device.password,
+                    'timeout': 30,  # 增加超时时间
+                    'auth_timeout': 30,
+                    'banner_timeout': 30,
+                    'fast_cli': False,
+                    'session_log': None  # 关闭会话日志以减少干扰
+                }
+                
+                if device.enable_password and device.enable_password.strip():
+                    connection_params['secret'] = device.enable_password
+                
+                # 连接设备
+                device_start_time = time.time()
+                logger.info(f"尝试连接设备: {device.ip}")
+                
+                connection = netmiko.ConnectHandler(**connection_params)
+                logger.info(f"成功连接到设备: {device.ip}")
+                
+                # 处理enable模式
+                if 'cisco_ios' in device_type and device.enable_password and device.enable_password.strip():
+                    connection.enable()
+                    logger.info(f"设备 {device.ip} 进入enable模式")
+                
+                # 处理命令
+                command_success = True  # 添加命令执行状态跟踪
+                command_results = []  # 添加command_results变量定义
+                if device.commands.startswith('[') and device.commands.endswith(']'):
+                    try:
+                        commands_list = json.loads(device.commands)
+                        commands = [str(cmd).strip() for cmd in commands_list if cmd]
+                    except Exception as e:
+                        logger.error(f"解析命令JSON失败: {e}")
+                        commands = [cmd.strip() for cmd in device.commands.split(',') if cmd.strip()]
+                else:
+                    commands = [cmd.strip() for cmd in device.commands.split(',') if cmd.strip()]
+                
+                # 清理命令
+                cleaned_commands = []
+                for cmd in commands:
+                    cmd = cmd.replace('"', '').replace("'", '')
+                    cmd = cmd.replace('[', '').replace(']', '')
+                    cmd = cmd.strip()
+                    if cmd:
+                        cleaned_commands.append(cmd)
+                
+                logger.info(f"设备 {device.ip} 执行命令列表: {cleaned_commands}")
+                
+                # 执行命令
+                for cmd in cleaned_commands:
+                    try:
+                        logger.info(f"设备 {device.ip} 执行命令: {cmd}")
+                        output = connection.send_command(cmd, strip_prompt=False, strip_command=False)
+                        command_results.append({
+                            'command': cmd,
+                            'output': output
+                        })
+                        logger.info(f"设备 {device.ip} 命令 {cmd} 执行成功")
+                    except Exception as e:
+                        logger.error(f"设备 {device.ip} 执行命令 {cmd} 失败: {str(e)}")
+                        command_success = False
+                        command_results.append({
+                            'command': cmd,
+                            'output': f"执行命令失败: {str(e)}"
+                        })
+                
+                # 断开连接
+                try:
+                    connection.disconnect()
+                    logger.info(f"设备 {device.ip} 断开连接")
+                except Exception as e:
+                    logger.warning(f"断开设备 {device.ip} 连接时出错: {str(e)}")
+                
+                # 保存巡检记录
+                record = InspectionRecord(
+                    device_id=device.id,
+                    device_name=device.name,
+                    result=json.dumps(command_results, ensure_ascii=False)
+                )
+                db.session.add(record)
+                db.session.commit()
+                logger.info(f"设备 {device.ip} 巡检记录已保存")
+                
+                # 更新设备巡检状态
+                device_details = json.loads(inspection_log.details)
+                device_details[idx]['status'] = '成功' if command_success else '失败'
+                device_details[idx]['message'] = '巡检完成' if command_success else error_msg
+                device_details[idx]['end_time'] = datetime.now(tz).isoformat()
+                device_details[idx]['duration'] = time.time() - device_start_time
+                
+                successful_count += 1 if command_success else 0
+                failed_count += 1 if not command_success else 0
+                logger.info(f"设备 {device.ip} 巡检完成")
+                
+            except Exception as e:
+                logger.error(f"设备 {device.ip} 巡检过程中出错: {str(e)}")
+                # 更新设备巡检状态
+                device_details = json.loads(inspection_log.details)
+                device_details[idx]['status'] = '失败'
+                device_details[idx]['message'] = f'巡检失败: {str(e)}'
+                device_details[idx]['end_time'] = datetime.now(tz).isoformat()
+                
+                failed_count += 1
+            
+            # 更新巡检日志
+            inspection_log.successful_devices = successful_count
+            inspection_log.failed_devices = failed_count
+            inspection_log.details = json.dumps(device_details)
+            db.session.commit()
+        
+        # 完成所有设备巡检
+        inspection_log.end_time = datetime.now(tz)
+        if inspection_log.status != '已取消':
+            inspection_log.status = '已完成'
+        inspection_log.total_duration = time.time() - start_time
+        db.session.commit()
+        logger.info(f"批量巡检任务 {inspection_log.id} 已完成，成功: {successful_count}，失败: {failed_count}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'批量巡检已完成，成功: {successful_count}，失败: {failed_count}',
+            'log_id': inspection_log.id
+        })
+    except Exception as e:
+        logger.error(f"批量巡检过程中发生未处理的异常: {str(e)}")
+        # 如果已创建日志，则更新日志状态
+        if 'inspection_log' in locals():
+            try:
+                inspection_log.end_time = datetime.now(tz)
+                inspection_log.status = '已完成'  # 标记为已完成但失败
+                inspection_log.total_duration = time.time() - start_time
+                db.session.commit()
+            except Exception as inner_e:
+                logger.error(f"更新巡检日志失败: {str(inner_e)}")
+                db.session.rollback()
+        
+        return jsonify({
+            'success': False,
+            'message': f'批量巡检过程中出错: {str(e)}'
+        }), 500
+
+# 巡检日志API
+@app.route('/api/inspection-logs', methods=['GET'])
+def get_inspection_logs():
+    try:
+        logs = InspectionLog.query.order_by(InspectionLog.start_time.desc()).all()
+        return jsonify([log.to_dict() for log in logs])
+    except Exception as e:
+        logger.error(f"获取巡检日志失败: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/inspection-logs/<int:log_id>', methods=['GET'])
+def get_inspection_log(log_id):
+    try:
+        log = InspectionLog.query.get_or_404(log_id)
+        return jsonify(log.to_dict())
+    except Exception as e:
+        logger.error(f"获取巡检日志详情失败: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/inspection-logs/<int:log_id>', methods=['DELETE'])
+def delete_inspection_log(log_id):
+    try:
+        log = InspectionLog.query.get_or_404(log_id)
+        db.session.delete(log)
+        db.session.commit()
+        return jsonify({'success': True, 'message': '巡检日志删除成功'})
+    except Exception as e:
+        logger.error(f"删除巡检日志失败: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# 添加强制停止巡检API
+@app.route('/api/inspection-logs/<int:log_id>/cancel', methods=['POST'])
+def cancel_inspection(log_id):
+    try:
+        inspection_log = InspectionLog.query.get_or_404(log_id)
+        
+        if inspection_log.status == '已完成':
+            return jsonify({
+                'success': False,
+                'message': '该巡检任务已完成，无法取消'
+            }), 400
+        
+        # 更新日志状态
+        inspection_log.status = '已取消'
+        inspection_log.end_time = datetime.now(tz)
+        
+        # 更新设备巡检状态
+        device_details = json.loads(inspection_log.details) if inspection_log.details else []
+        for detail in device_details:
+            if detail['status'] in ['进行中', '等待中']:
+                detail['status'] = '已取消'
+                detail['message'] = '用户取消巡检'
+                detail['end_time'] = datetime.now(tz).isoformat()
+        
+        inspection_log.details = json.dumps(device_details)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': '已取消巡检任务'
+        })
+    except Exception as e:
+        logger.error(f"取消巡检任务失败: {str(e)}")
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

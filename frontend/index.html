@@ -393,6 +393,9 @@
                     <i class="el-icon-upload"></i> 导入设备
                 </el-button>
                 <el-button type="primary" @click="showAddDeviceDialog">添加设备</el-button>
+                <el-button type="info" @click="showInspectionLogs">
+                    <i class="el-icon-document"></i> 巡检日志
+                </el-button>
             </div>
         </div>
 
@@ -562,7 +565,12 @@
         </div>
 
         <div class="inspection-records">
-            <h2>巡检记录</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h2 style="margin: 0;">巡检记录</h2>
+                <el-button type="info" @click="showInspectionLogs">
+                    <i class="el-icon-document"></i> 查看巡检日志
+                </el-button>
+            </div>
             <el-table 
                 :data="inspectionRecords.slice((recordCurrentPage - 1) * recordPageSize, recordCurrentPage * recordPageSize)" 
                 style="width: 100%"
@@ -857,9 +865,160 @@
                 <el-button @click="groupManagerDialogVisible = false">关闭</el-button>
             </div>
         </el-dialog>
+
+        <!-- 巡检日志对话框 -->
+        <el-dialog title="巡检日志" :visible.sync="inspectionLogDialogVisible" width="80%" :close-on-click-modal="false">
+            <div class="card">
+                <el-table 
+                    :data="inspectionLogs.slice((logCurrentPage - 1) * logPageSize, logCurrentPage * logPageSize)" 
+                    style="width: 100%"
+                    @row-click="showLogDetails"
+                    row-key="id"
+                    class="compact-table">
+                    <el-table-column prop="id" label="ID" width="60"></el-table-column>
+                    <el-table-column prop="start_time" label="开始时间" width="180">
+                        <template slot-scope="scope">
+                            {{ formatDateTime(scope.row.start_time) }}
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="end_time" label="结束时间" width="180">
+                        <template slot-scope="scope">
+                            {{ formatDateTime(scope.row.end_time) || '进行中' }}
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="设备数">
+                        <template slot-scope="scope">
+                            <div>总计: {{ scope.row.total_devices }} 台</div>
+                            <div>成功: {{ scope.row.successful_devices }} 台</div>
+                            <div>失败: {{ scope.row.failed_devices }} 台</div>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="total_duration" label="总耗时" width="120">
+                        <template slot-scope="scope">
+                            {{ formatDuration(scope.row.total_duration) }}
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="status" label="状态" width="100">
+                        <template slot-scope="scope">
+                            <el-tag :type="getStatusType(scope.row.status)">{{ scope.row.status }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="150">
+                        <template slot-scope="scope">
+                            <div class="operation-buttons">
+                                <el-button 
+                                    size="mini" 
+                                    type="primary" 
+                                    @click.stop="showLogDetails(scope.row)">
+                                    详情
+                                </el-button>
+                                <el-button 
+                                    size="mini" 
+                                    type="danger" 
+                                    @click.stop="deleteInspectionLog(scope.row)">
+                                    删除
+                                </el-button>
+                            </div>
+                        </template>
+                    </el-table-column>
+                </el-table>
+                <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
+                    <el-pagination
+                        @current-change="handleLogPageChange"
+                        :current-page="logCurrentPage"
+                        :page-size="logPageSize"
+                        layout="prev, pager, next, total"
+                        :total="inspectionLogs.length">
+                    </el-pagination>
+                </div>
+            </div>
+        </el-dialog>
+
+        <!-- 巡检日志详情对话框 -->
+        <el-dialog title="巡检日志详情" :visible.sync="logDetailsDialogVisible" width="80%" :close-on-click-modal="false">
+            <div v-if="currentLogDetails">
+                <div class="card" style="margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                        <div>
+                            <h3 style="margin: 0 0 10px 0;">巡检摘要</h3>
+                            <div><strong>开始时间:</strong> {{ formatDateTime(currentLogDetails.start_time) }}</div>
+                            <div><strong>结束时间:</strong> {{ formatDateTime(currentLogDetails.end_time) || '进行中' }}</div>
+                            <div><strong>状态:</strong> <el-tag :type="getStatusType(currentLogDetails.status)">{{ currentLogDetails.status }}</el-tag></div>
+                        </div>
+                        <div>
+                            <div><strong>总设备数:</strong> {{ currentLogDetails.total_devices }} 台</div>
+                            <div><strong>成功:</strong> {{ currentLogDetails.successful_devices }} 台</div>
+                            <div><strong>失败:</strong> {{ currentLogDetails.failed_devices }} 台</div>
+                            <div><strong>总耗时:</strong> {{ formatDuration(currentLogDetails.total_duration) }}</div>
+                        </div>
+                    </div>
+                    <div v-if="currentLogDetails.status === '进行中'" style="text-align: right;">
+                        <el-button type="danger" @click="cancelInspection(currentLogDetails)">强制停止巡检</el-button>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3 style="margin: 0 0 15px 0;">设备巡检详情</h3>
+                    <el-table :data="currentLogDetails.details" style="width: 100%">
+                        <el-table-column prop="device_name" label="设备名称" width="150"></el-table-column>
+                        <el-table-column prop="device_ip" label="IP地址" width="150"></el-table-column>
+                        <el-table-column prop="status" label="状态" width="100">
+                            <template slot-scope="scope">
+                                <el-tag :type="getDeviceStatusType(scope.row.status)">{{ scope.row.status }}</el-tag>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="耗时" width="100">
+                            <template slot-scope="scope">
+                                {{ formatDuration(scope.row.duration) || '—' }}
+                            </template>
+                        </el-table-column>
+                        <el-table-column prop="message" label="消息"></el-table-column>
+                        <el-table-column label="开始时间" width="180">
+                            <template slot-scope="scope">
+                                {{ formatDateTime(scope.row.start_time) || '—' }}
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="结束时间" width="180">
+                            <template slot-scope="scope">
+                                {{ formatDateTime(scope.row.end_time) || '—' }}
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                </div>
+            </div>
+        </el-dialog>
     </div>
 
     <script>
+        // 添加控制台日志控制功能
+        (function() {
+            // 在生产环境中禁用控制台日志
+            const isProduction = false; // 可以根据需要改为true
+            
+            if (isProduction) {
+                const noop = function() {};
+                const methods = ['log', 'debug', 'info', 'warn'];
+                
+                methods.forEach(method => {
+                    console[method] = noop;
+                });
+                
+                // 保留错误日志以便故障排查
+                const originalError = console.error;
+                console.error = function(msg, ...args) {
+                    // 只记录严重错误
+                    if (msg && (
+                        msg.toString().includes('Exception') || 
+                        msg.toString().includes('Error') ||
+                        args.some(arg => arg && arg.toString && arg.toString().includes('Error'))
+                    )) {
+                        originalError.apply(console, [msg, ...args]);
+                    }
+                };
+            }
+        })();
+        
+        // Vue应用
         new Vue({
             el: '#app',
             data: {
@@ -886,6 +1045,12 @@
                 deviceGroups: ['交换机', 'AP', 'PC', '路由器'],
                 defaultGroups: ['交换机', 'AP', 'PC', '路由器'],
                 groupPages: {},
+                inspectionLogDialogVisible: false,
+                logDetailsDialogVisible: false,
+                inspectionLogs: [],
+                currentLogDetails: null,
+                logCurrentPage: 1,
+                logPageSize: 10,
                 editingDevice: {
                     id: null,
                     name: '',
@@ -984,7 +1149,6 @@
                         
                         // 如果有选中的设备，在更新数据后重新设置选中状态
                         if (selectedIds.length > 0) {
-                            console.log("保持选中的设备ID:", selectedIds);
                             // 稍微延迟以确保表格已更新
                             setTimeout(() => {
                                 // 这里不直接设置selectedDevices，让表格通过selection-change事件设置
@@ -1021,11 +1185,9 @@
                         this.inspectionRecords = records.sort((a, b) => 
                             new Date(b.created_at) - new Date(a.created_at)
                         );
-                        console.log('获取到的巡检记录:', this.inspectionRecords);
                         
                         // 如果有选中的记录，在更新数据后重新设置选中状态
                         if (selectedIds.length > 0) {
-                            console.log("保持选中的记录ID:", selectedIds);
                             // 稍微延迟以确保表格已更新
                             setTimeout(() => {
                                 // 这里不直接设置selectedRecords，让表格通过selection-change事件设置
@@ -1164,18 +1326,48 @@
                         this.inspectionProgress = 0;
                         this.batchInspecting = false;
                         
-                        // 模拟进度增加
-                        const progressInterval = setInterval(() => {
-                            if (this.inspectionProgress < 90) {
-                                this.inspectionProgress += 10;
-                            }
-                        }, 500);
+                        // 创建一个日志ID变量，用于保存可能的日志记录
+                        let inspectionLogId = null;
                         
+                        // 初始化进度增长
+                        const startProgressAnimation = () => {
+                            // 首先快速增长到20%，表示开始巡检
+                            let currentProgress = 0;
+                            const initialInterval = setInterval(() => {
+                                if (currentProgress < 20) {
+                                    currentProgress += 5;
+                                    this.inspectionProgress = currentProgress;
+                                } else {
+                                    clearInterval(initialInterval);
+                                    
+                                    // 然后缓慢增长到80%，模拟巡检过程
+                                    const slowInterval = setInterval(() => {
+                                        // 只有在未完成状态下才继续增加进度
+                                        if (this.inspectionProgress < 80 && this.inspectionInProgress) {
+                                            // 随机增加1-3%，模拟不同命令执行的时间差异
+                                            const increment = Math.floor(Math.random() * 3) + 1;
+                                            this.inspectionProgress = Math.min(80, this.inspectionProgress + increment);
+                                        } else {
+                                            clearInterval(slowInterval);
+                                        }
+                                    }, 800); // 每800毫秒增加一次进度
+                                }
+                            }, 100);
+                        };
+                        
+                        // 启动进度动画
+                        startProgressAnimation();
+                        
+                        // 执行巡检请求
                         const response = await axios.post(`http://localhost:5000/api/devices/${device.id}/inspect`);
                         
-                        // 清除进度定时器
-                        clearInterval(progressInterval);
+                        // 巡检完成，将进度设为100%
                         this.inspectionProgress = 100;
+                        
+                        // 如果响应中包含日志ID，保存它
+                        if (response.data && response.data.log_id) {
+                            inspectionLogId = response.data.log_id;
+                        }
                         
                         // 等待进度条完成动画
                         setTimeout(async () => {
@@ -1186,14 +1378,31 @@
                                 this.$message.success('巡检完成');
                                 // 刷新巡检记录
                                 await this.fetchInspectionRecords();
+                                // 刷新巡检日志
+                                await this.fetchInspectionLogs();
+                                
+                                // 如果有日志ID，显示详情
+                                if (inspectionLogId) {
+                                    this.fetchInspectionLogs().then(() => {
+                                        const log = this.inspectionLogs.find(l => l.id === inspectionLogId);
+                                        if (log) {
+                                            this.currentLogDetails = log;
+                                            this.logDetailsDialogVisible = true;
+                                        }
+                                    });
+                                }
                             } else {
                                 throw new Error(response.data.message || '巡检失败');
                             }
                         }, 500);
                     } catch (error) {
+                        // 出错时停止巡检，将进度设为100%以关闭进度条
+                        this.inspectionProgress = 100;
+                        setTimeout(() => {
                         this.inspectionInProgress = false;
                         this.currentInspectingDevice = null;
                         this.$message.error('巡检失败: ' + (error.response?.data?.message || error.message));
+                        }, 500);
                     }
                 },
                 showResult(record) {
@@ -1342,72 +1551,178 @@
                         return;
                     }
                     
+                    const deviceIds = this.selectedDevices.map(device => device.id);
+                    const onlineDevices = this.selectedDevices.filter(device => device.status === 'online');
+                    
                     try {
+                        if (onlineDevices.length === 0) {
+                            this.$message.warning('所选设备中没有在线设备，无法进行巡检');
+                            return;
+                        }
+                        
+                        // 使用批量巡检API
+                        const deviceIds = onlineDevices.map(device => device.id);
+                        
                         // 设置批量巡检状态
                         this.inspectionInProgress = true;
                         this.batchInspecting = true;
                         this.completedInspections = 0;
-                        
-                        // 获取在线设备
-                        const onlineDevices = this.selectedDevices.filter(device => device.status === 'online');
                         this.totalInspections = onlineDevices.length;
                         
-                        if (onlineDevices.length === 0) {
-                            this.$message.warning('所选设备中没有在线设备，无法进行巡检');
+                        // 初始化进度条，立即显示一些进度
+                        this.inspectionProgress = 5;
+                        
+                        // 创建进度动画，在轮询开始前给用户一些反馈
+                        let currentProgress = 5;
+                        const initialProgressInterval = setInterval(() => {
+                            if (currentProgress < 20) {
+                                currentProgress += 3;
+                                this.inspectionProgress = currentProgress;
+                            } else {
+                                clearInterval(initialProgressInterval);
+                            }
+                        }, 300);
+                        
+                        // 调用批量巡检API
+                        const response = await axios.post('http://localhost:5000/api/devices/batch-inspect', {
+                            device_ids: deviceIds
+                        });
+                        
+                        // 获取日志ID并开始轮询进度
+                        const logId = response.data.log_id;
+                        if (logId) {
+                            // 清除初始进度动画
+                            clearInterval(initialProgressInterval);
+                            // 确保进度至少达到20%
+                            this.inspectionProgress = Math.max(20, this.inspectionProgress);
+                            // 开始轮询真实进度
+                            this.pollInspectionProgress(logId);
+                        } else {
+                            // 巡检已完成
+                            this.inspectionProgress = 100;
+                            setTimeout(() => {
+                            this.inspectionInProgress = false;
+                            this.batchInspecting = false;
+                                this.currentInspectingDevice = null;
+                                
+                                // 显示结果
+                                this.$message.success(response.data.message);
+                                
+                                // 刷新巡检记录
+                                this.fetchInspectionRecords();
+                            }, 500);
+                        }
+                    } catch (error) {
+                        this.inspectionInProgress = false;
+                        this.batchInspecting = false;
+                        this.currentInspectingDevice = null;
+                        this.$message.error('批量巡检失败: ' + (error.response?.data?.message || error.message));
+                    }
+                },
+                
+                // 轮询检查巡检进度
+                async pollInspectionProgress(logId) {
+                    if (!this.inspectionInProgress) return;
+                    
+                    try {
+                        const response = await axios.get(`http://localhost:5000/api/inspection-logs/${logId}`);
+                        const log = response.data;
+                        
+                        if (!log) {
+                            clearTimeout(this.pollingTimeout);
                             this.inspectionInProgress = false;
                             this.batchInspecting = false;
                             return;
                         }
                         
-                        for (const device of onlineDevices) {
-                            try {
-                                // 更新当前巡检设备和进度
-                                this.currentInspectingDevice = device;
-                                this.inspectionProgress = 0;
-                                
-                                // 模拟进度增加
-                                const progressInterval = setInterval(() => {
-                                    if (this.inspectionProgress < 90) {
-                                        this.inspectionProgress += 10;
-                                    }
-                                }, 500);
-                                
-                                // 执行巡检
-                                const response = await axios.post(`http://localhost:5000/api/devices/${device.id}/inspect`);
-                                
-                                // 清除进度定时器
-                                clearInterval(progressInterval);
-                                this.inspectionProgress = 100;
-                                
-                                // 更新完成数量
-                                this.completedInspections++;
-                                
-                                // 等待进度条完成动画
-                                await new Promise(resolve => setTimeout(resolve, 500));
-                                
-                                if (!response.data.success) {
-                                    throw new Error(response.data.message || '巡检失败');
+                        // 更新进度信息
+                        const totalDevices = log.total_devices || 0;
+                        const completedDevices = (log.successful_devices || 0) + (log.failed_devices || 0);
+                        this.completedInspections = completedDevices;
+                        this.totalInspections = totalDevices;
+                        
+                        // 计算实际完成百分比（最大80%，留20%给完成动画）
+                        let calculatedProgress = 0;
+                        if (totalDevices > 0) {
+                            calculatedProgress = Math.floor((completedDevices / totalDevices) * 80);
+                        }
+                        
+                        // 确保进度不回退，且至少有20%的起始进度
+                        // 如果新计算的进度比当前进度小，则进行小幅递增
+                        if (calculatedProgress <= this.inspectionProgress) {
+                            // 如果实际进度没有变化或减少，手动增加一点进度（除非已经接近80%）
+                            if (this.inspectionProgress < 75) {
+                                this.inspectionProgress += 1;
+                            }
+                        } else {
+                            // 如果实际进度增加，设置为计算的进度
+                            this.inspectionProgress = calculatedProgress;
+                        }
+                        
+                        // 设置当前巡检设备
+                        if (log.details && log.details.length > 0) {
+                            const inProgressDevice = log.details.find(d => d.status === '进行中');
+                            if (inProgressDevice) {
+                                // 从设备中查找当前正在巡检的设备
+                                const device = this.devices.find(d => d.id === inProgressDevice.device_id);
+                                if (device) {
+                                    this.currentInspectingDevice = device;
                                 }
-                            } catch (error) {
-                                console.error(`巡检设备 ${device.name} 失败: ${error.message}`);
                             }
                         }
                         
-                        // 所有设备巡检完成
+                        // 检查巡检是否完成
+                        if (log.status === '已完成' || log.status === '已取消') {
+                            // 巡检完成或被取消
+                            this.inspectionProgress = 100;
+                            setTimeout(() => {
                         this.inspectionInProgress = false;
                         this.batchInspecting = false;
                         this.currentInspectingDevice = null;
-                        this.$message.success('批量巡检完成');
+                                
+                                // 获取并显示巡检日志详情
+                                this.fetchInspectionLogs().then(() => {
+                                    // 找到对应的日志
+                                    const updatedLog = this.inspectionLogs.find(l => l.id === logId);
+                                    if (updatedLog) {
+                                        this.currentLogDetails = updatedLog;
+                                        this.logDetailsDialogVisible = true;
+                                    }
+                                });
                         
                         // 刷新巡检记录
-                        await this.fetchInspectionRecords();
+                                this.fetchInspectionRecords();
+                                
+                                if (log.status === '已完成') {
+                                    this.$message.success(`批量巡检已完成，成功: ${log.successful_devices}，失败: ${log.failed_devices}`);
+                                } else {
+                                    this.$message.warning('巡检已被取消');
+                                }
+                            }, 500);
+                            
+                            // 停止轮询
+                            return;
+                        }
+                        
+                        // 继续轮询
+                        this.pollingTimeout = setTimeout(() => {
+                            this.pollInspectionProgress(logId);
+                        }, 2000); // 每2秒轮询一次
                     } catch (error) {
-                        this.inspectionInProgress = false;
-                        this.batchInspecting = false;
-                        this.currentInspectingDevice = null;
-                        this.$message.error('批量巡检失败: ' + error.message);
+                        console.error('轮询巡检进度出错:', error);
+                        
+                        // 出错后也递增一点进度，避免卡住感
+                        if (this.inspectionProgress < 75) {
+                            this.inspectionProgress += 1;
+                        }
+                        
+                        // 出错后尝试再次轮询，但降低频率
+                        this.pollingTimeout = setTimeout(() => {
+                            this.pollInspectionProgress(logId);
+                        }, 5000); // 错误后5秒再试
                     }
                 },
+                
                 async batchDelete() {
                     if (!this.selectedDevices.length) {
                         this.$message.warning('请选择要删除的设备');
@@ -1448,109 +1763,78 @@
                         }
                     }
                 },
-                handleDevicePageChange(page) {
-                    this.currentPage = page;
-                },
-                handleGroupPageChange(group, page) {
-                    this.$set(this.groupPages, group, page);
-                },
-                handleRecordPageChange(page) {
-                    this.recordCurrentPage = page;
-                },
-                filterDevicesByGroup(group) {
-                    // 日志输出，帮助调试
-                    console.log(`正在过滤分组: "${group}"`);
-                    console.log("所有设备:", this.devices.map(d => ({name: d.name, group: d.group})));
-                    
-                    const filtered = this.devices.filter(device => {
-                        // 确保设备的group属性存在
-                        if (!device.group) return false;
-                        
-                        // 日志输出，帮助调试
-                        console.log(`比较: 设备 "${device.name}" 分组 "${device.group}" vs "${group}"`);
-                        
-                        // 不区分大小写比较
-                        const deviceGroupLower = device.group.toLowerCase().trim();
-                        const targetGroupLower = group.toLowerCase().trim();
-                        const result = deviceGroupLower === targetGroupLower;
-                        
-                        console.log(`比较结果: ${result}, 设备组(小写): "${deviceGroupLower}", 目标组(小写): "${targetGroupLower}"`);
-                        return result;
-                    });
-                    
-                    console.log(`分组 "${group}" 过滤结果: ${filtered.length} 个设备`);
-                    return filtered;
-                },
                 async batchInspectGroup() {
                     if (!this.selectedGroupDevices.length) {
                         this.$message.warning('请选择要巡检的设备');
                         return;
                     }
                     
+                    const deviceIds = this.selectedGroupDevices.map(device => device.id);
+                        const onlineDevices = this.selectedGroupDevices.filter(device => device.status === 'online');
+                        
                     try {
+                        if (onlineDevices.length === 0) {
+                            this.$message.warning('所选设备中没有在线设备，无法进行巡检');
+                            return;
+                        }
+                        
+                        // 使用批量巡检API
+                        const deviceIds = onlineDevices.map(device => device.id);
+                        
                         // 设置批量巡检状态
                         this.inspectionInProgress = true;
                         this.batchInspecting = true;
                         this.completedInspections = 0;
-                        
-                        // 获取在线设备
-                        const onlineDevices = this.selectedGroupDevices.filter(device => device.status === 'online');
                         this.totalInspections = onlineDevices.length;
                         
-                        if (onlineDevices.length === 0) {
-                            this.$message.warning('所选设备中没有在线设备，无法进行巡检');
-                            this.inspectionInProgress = false;
-                            this.batchInspecting = false;
-                            return;
-                        }
+                        // 初始化进度条，立即显示一些进度
+                        this.inspectionProgress = 5;
                         
-                        for (const device of onlineDevices) {
-                            try {
-                                // 更新当前巡检设备和进度
-                                this.currentInspectingDevice = device;
-                                this.inspectionProgress = 0;
-                                
-                                // 模拟进度增加
-                                const progressInterval = setInterval(() => {
-                                    if (this.inspectionProgress < 90) {
-                                        this.inspectionProgress += 10;
-                                    }
-                                }, 500);
-                                
-                                // 执行巡检
-                                const response = await axios.post(`http://localhost:5000/api/devices/${device.id}/inspect`);
-                                
-                                // 清除进度定时器
-                                clearInterval(progressInterval);
-                                this.inspectionProgress = 100;
-                                
-                                // 更新完成数量
-                                this.completedInspections++;
-                                
-                                // 等待进度条完成动画
-                                await new Promise(resolve => setTimeout(resolve, 500));
-                                
-                                if (!response.data.success) {
-                                    throw new Error(response.data.message || '巡检失败');
-                                }
-                            } catch (error) {
-                                console.error(`巡检设备 ${device.name} 失败: ${error.message}`);
+                        // 创建进度动画，在轮询开始前给用户一些反馈
+                        let currentProgress = 5;
+                        const initialProgressInterval = setInterval(() => {
+                            if (currentProgress < 20) {
+                                currentProgress += 3;
+                                this.inspectionProgress = currentProgress;
+                            } else {
+                                clearInterval(initialProgressInterval);
                             }
-                        }
+                        }, 300);
                         
-                        // 所有设备巡检完成
+                        // 调用批量巡检API
+                        const response = await axios.post('http://localhost:5000/api/devices/batch-inspect', {
+                            device_ids: deviceIds
+                        });
+                        
+                        // 获取日志ID并开始轮询进度
+                        const logId = response.data.log_id;
+                        if (logId) {
+                            // 清除初始进度动画
+                            clearInterval(initialProgressInterval);
+                            // 确保进度至少达到20%
+                            this.inspectionProgress = Math.max(20, this.inspectionProgress);
+                            // 开始轮询真实进度
+                            this.pollInspectionProgress(logId);
+                        } else {
+                            // 巡检已完成
+                            this.inspectionProgress = 100;
+                            setTimeout(() => {
                         this.inspectionInProgress = false;
                         this.batchInspecting = false;
                         this.currentInspectingDevice = null;
-                        this.$message.success('批量巡检完成');
+                                
+                                // 显示结果
+                                this.$message.success(response.data.message);
                         
                         // 刷新巡检记录
-                        await this.fetchInspectionRecords();
+                                this.fetchInspectionRecords();
+                            }, 500);
+                        }
                     } catch (error) {
                         this.inspectionInProgress = false;
                         this.batchInspecting = false;
                         this.currentInspectingDevice = null;
-                        this.$message.error('批量巡检失败: ' + error.message);
+                        this.$message.error('批量巡检失败: ' + (error.response?.data?.message || error.message));
                     }
                 },
                 async batchDeleteGroup() {
@@ -1757,6 +2041,135 @@
                     
                     // 刷新设备列表
                     await this.fetchDevices();
+                },
+                showInspectionLogs() {
+                    this.fetchInspectionLogs();
+                    this.inspectionLogDialogVisible = true;
+                },
+                
+                async fetchInspectionLogs() {
+                    try {
+                        const response = await axios.get('http://localhost:5000/api/inspection-logs');
+                        this.inspectionLogs = response.data;
+                    } catch (error) {
+                        this.$message.error('获取巡检日志失败: ' + (error.response?.data?.error || error.message));
+                    }
+                },
+                
+                showLogDetails(log) {
+                    this.currentLogDetails = log;
+                    this.logDetailsDialogVisible = true;
+                },
+                
+                async deleteInspectionLog(log) {
+                    try {
+                        await this.$confirm(`确定要删除ID为${log.id}的巡检日志吗？`, '提示', {
+                            type: 'warning'
+                        });
+                        
+                        await axios.delete(`http://localhost:5000/api/inspection-logs/${log.id}`);
+                        this.$message.success('巡检日志删除成功');
+                        
+                        // 刷新日志列表
+                        await this.fetchInspectionLogs();
+                    } catch (error) {
+                        if (error !== 'cancel') {
+                            this.$message.error('删除巡检日志失败: ' + (error.response?.data?.error || error.message));
+                        }
+                    }
+                },
+                
+                handleLogPageChange(page) {
+                    this.logCurrentPage = page;
+                },
+                
+                getStatusType(status) {
+                    const statusMap = {
+                        '进行中': 'warning',
+                        '已完成': 'success',
+                        '已取消': 'info'
+                    };
+                    return statusMap[status] || 'info';
+                },
+                
+                getDeviceStatusType(status) {
+                    const statusMap = {
+                        '成功': 'success',
+                        '失败': 'danger',
+                        '进行中': 'warning',
+                        '等待中': 'info'
+                    };
+                    return statusMap[status] || 'info';
+                },
+                
+                formatDuration(seconds) {
+                    if (!seconds) return '—';
+                    
+                    const hours = Math.floor(seconds / 3600);
+                    const minutes = Math.floor((seconds % 3600) / 60);
+                    const remainingSeconds = Math.floor(seconds % 60);
+                    
+                    let result = '';
+                    if (hours > 0) result += `${hours}小时`;
+                    if (minutes > 0) result += `${minutes}分钟`;
+                    if (remainingSeconds > 0 || result === '') result += `${remainingSeconds}秒`;
+                    
+                    return result;
+                },
+                async cancelInspection(log) {
+                    try {
+                        await this.$confirm('确定要强制停止当前巡检任务吗？', '警告', {
+                            type: 'warning',
+                            confirmButtonText: '确定停止',
+                            cancelButtonText: '取消'
+                        });
+                        
+                        const response = await axios.post(`http://localhost:5000/api/inspection-logs/${log.id}/cancel`);
+                        this.$message.success(response.data.message);
+                        
+                        // 刷新当前日志详情
+                        const logResponse = await axios.get(`http://localhost:5000/api/inspection-logs/${log.id}`);
+                        this.currentLogDetails = logResponse.data;
+                        
+                        // 刷新日志列表
+                        await this.fetchInspectionLogs();
+                        
+                        // 如果当前有进行中的批量巡检UI，也更新它
+                        if (this.inspectionInProgress && this.batchInspecting) {
+                            this.inspectionInProgress = false;
+                            this.batchInspecting = false;
+                            this.currentInspectingDevice = null;
+                        }
+                        
+                    } catch (error) {
+                        if (error !== 'cancel') {
+                            this.$message.error('取消巡检失败: ' + (error.response?.data?.error || error.message));
+                        }
+                    }
+                },
+                handleDevicePageChange(page) {
+                    this.currentPage = page;
+                },
+                handleGroupPageChange(group, page) {
+                    this.$set(this.groupPages, group, page);
+                },
+                handleRecordPageChange(page) {
+                    this.recordCurrentPage = page;
+                },
+                filterDevicesByGroup(group) {
+                    const filtered = this.devices.filter(device => {
+                        // 确保设备的group属性存在
+                        if (!device.group) return false;
+                        
+                        // 不区分大小写比较
+                        const deviceGroupLower = device.group.toLowerCase().trim();
+                        const targetGroupLower = group.toLowerCase().trim();
+                        const result = deviceGroupLower === targetGroupLower;
+                        
+                        return result;
+                    });
+                    
+                    return filtered;
                 }
             },
             mounted() {
@@ -1771,6 +2184,7 @@
                 // 获取设备列表和巡检记录
                 this.fetchDevices().then(() => {
                     this.fetchInspectionRecords();
+                    this.fetchInspectionLogs();
                 });
                 
                 // 启动设备状态检查
@@ -1779,6 +2193,11 @@
             beforeDestroy() {
                 // 组件销毁前清除定时器
                 this.stopStatusCheck();
+                
+                // 清除轮询定时器
+                if (this.pollingTimeout) {
+                    clearTimeout(this.pollingTimeout);
+                }
             }
         });
     </script>
