@@ -18,7 +18,7 @@
 
 # 公告
 
-## 项目还在开发中，作者是编程老白菜，有些commit有bug，目前仅支持Windows 10，其他没条件没测试
+## 项目还在开发中，作者是编程老白菜，有些commit有bug，目前仅支持 Windows 10/11，建议使用 Python 3.8 ~ 3.11，其他系统未完整测试
 ![image](https://github.com/user-attachments/assets/3f75e761-1ca6-40f7-8d5f-7abc607b284f)
 
 
@@ -45,7 +45,7 @@
 
 ### 环境要求
 
-- Python 3.6+
+- Python 3.8 ~ 3.11
 - 依赖包（见requirements.txt）
 
 ### 🪟 Windows 部署步骤

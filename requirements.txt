@@ -5,5 +5,5 @@ flask-cors==3.0.10
 netmiko==3.4.0
 python-dotenv>=0.21.0
 pytz==2021.1
-pandas>=2.0.0
+pandas>=1.5,<2.0
 openpyxl>=3.1.0 
